@@ -3,10 +3,7 @@
 import asyncio
 import logging
 from datetime import date, timedelta
-from functools import lru_cache
 from typing import Optional
-
-import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +29,8 @@ def _fetch_prices_sync(ticker: str, trade_date: date) -> dict:
     }
 
     try:
+        import yfinance as yf
+
         stock = yf.Ticker(ticker)
 
         # Get sector/industry info from the stock info
