@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { api, type Member, type Trade, type TradesResponse } from '../api/client';
+import { api, type Member, type TradesResponse } from '../api/client';
 import PartyBadge from '../components/PartyBadge';
 import TradeTable from '../components/TradeTable';
 import Pagination from '../components/Pagination';
@@ -10,6 +10,7 @@ export default function MemberProfile() {
   const [member, setMember] = useState<Member | null>(null);
   const [tradesData, setTradesData] = useState<TradesResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [tradesLoading, setTradesLoading] = useState(true);
   const [offset, setOffset] = useState(0);
   const limit = 25;
@@ -17,7 +18,14 @@ export default function MemberProfile() {
   useEffect(() => {
     if (!id) return;
     setLoading(true);
-    api.getMember(id).then(setMember).catch(console.error).finally(() => setLoading(false));
+    setError(null);
+    api.getMember(id)
+      .then(setMember)
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to load member');
+        console.error(err);
+      })
+      .finally(() => setLoading(false));
   }, [id]);
 
   useEffect(() => {
@@ -33,8 +41,19 @@ export default function MemberProfile() {
   if (loading) {
     return (
       <div className="animate-pulse space-y-4">
+        <div className="h-4 bg-slate-700 rounded w-32" />
         <div className="h-8 bg-slate-700 rounded w-48" />
         <div className="h-40 bg-slate-800 rounded-lg" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center py-12">
+        <div className="text-red-400 text-lg mb-2">Error loading member</div>
+        <div className="text-slate-500 text-sm mb-4">{error}</div>
+        <Link to="/" className="text-blue-400 hover:underline">Back to Trade Feed</Link>
       </div>
     );
   }
@@ -49,6 +68,7 @@ export default function MemberProfile() {
   }
 
   const chamberLabel = member.chamber === 'senate' ? 'Senator' : 'Representative';
+  const lateCount = (member as Member & { late_filing_count?: number }).late_filing_count;
 
   return (
     <div className="space-y-6">
@@ -64,17 +84,25 @@ export default function MemberProfile() {
             <div className="flex items-center gap-3 flex-wrap">
               <h1 className="text-2xl font-bold text-slate-100">{member.name}</h1>
               <PartyBadge party={member.party} />
+              {lateCount != null && lateCount > 0 && (
+                <span className="px-2 py-0.5 bg-red-900/50 border border-red-700 text-red-300 rounded text-xs">
+                  {lateCount} late filing{lateCount > 1 ? 's' : ''}
+                </span>
+              )}
             </div>
             <div className="text-slate-400 mt-1">
               {chamberLabel} &middot; {member.state}
             </div>
             {member.committees && member.committees.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {member.committees.map((c) => (
-                  <span key={c} className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">
-                    {c}
-                  </span>
-                ))}
+              <div className="mt-3">
+                <div className="text-slate-500 text-xs uppercase tracking-wide mb-1">Committees</div>
+                <div className="flex flex-wrap gap-2">
+                  {member.committees.map((c) => (
+                    <span key={c} className="px-2 py-1 bg-slate-700 text-slate-300 rounded text-xs">
+                      {c}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </div>
