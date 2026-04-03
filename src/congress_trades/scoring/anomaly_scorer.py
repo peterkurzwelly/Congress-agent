@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from congress_trades.api.schemas import EnrichmentData, LateFilingInfo
 from congress_trades.config import settings
 from congress_trades.db.models import EnrichedTrade, Filing, Member, Trade
+from congress_trades.enrichment.bill_correlator import find_related_bills, score_bill_timing
 from congress_trades.enrichment.committee_mapper import (
     fetch_member_committees,
     get_committee_relevance,
@@ -130,14 +131,30 @@ async def _score_concurrent_trades(
         return 10.0
 
 
-def _score_trade_timing() -> float:
-    """Trade timing score (weight: 10%). Placeholder for bill/hearing correlation.
+async def _score_trade_timing(
+    member_id: str,
+    trade_date: date,
+    ticker: str | None,
+    sector: str | None,
+) -> float:
+    """Trade timing score (weight: 10%). Cross-references trade with bill activity.
 
-    In a full implementation this would cross-reference the trade date with
-    upcoming committee hearings, floor votes, and bill introductions.
+    Uses the bill correlator to find bills sponsored/cosponsored by the member
+    near the trade date, then scores based on timing suspiciousness.
+    Returns 0.0 gracefully when the Congress API key is not configured.
     """
-    # Placeholder -- return 0 until bill/hearing data is integrated
-    return 0.0
+    try:
+        related_bills = await find_related_bills(
+            member_id=member_id,
+            trade_date=trade_date,
+            ticker=ticker,
+            sector=sector,
+            window_days=30,
+        )
+        return score_bill_timing(related_bills, trade_date)
+    except Exception as exc:
+        logger.warning("Bill timing scoring failed for %s: %s", member_id, exc)
+        return 0.0
 
 
 async def _score_historical_pattern(
@@ -227,7 +244,15 @@ async def score_trade(
         s_concurrent = await _score_concurrent_trades(
             ticker, trade.trade_date, trade.member_id, session
         )
-    s_timing = _score_trade_timing()
+    s_timing = await _score_trade_timing(
+        member_id=trade.member_id,
+        trade_date=trade.trade_date,
+        ticker=ticker,
+        sector=sector,
+    )
+    if s_timing >= 5.0:
+        flags.append("bill_timing")
+
     s_historical = await _score_historical_pattern(
         trade.member_id, ticker or "", trade.amount_min, session
     )

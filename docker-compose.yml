@@ -1,0 +1,28 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - db-data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/congress_trades.db
+    restart: unless-stopped
+
+  scraper:
+    build: .
+    command: uv run python -m congress_trades.pipeline
+    volumes:
+      - db-data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/congress_trades.db
+    depends_on:
+      - app
+    restart: unless-stopped
+    profiles:
+      - with-scraper
+
+volumes:
+  db-data:
