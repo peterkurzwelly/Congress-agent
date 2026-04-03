@@ -104,28 +104,36 @@ def _parse_search_results(html: str) -> list[dict[str, Any]]:
         logger.info("No results table found in HTML response")
         return results
 
+    # Detect column layout from header row
+    header_row = table.find("tr")
+    headers = [th.get_text(strip=True).lower() for th in header_row.find_all(["th", "td"])] if header_row else []
+
     rows = table.find_all("tr")[1:]  # skip header row
     for row in rows:
         cols = row.find_all("td")
-        if len(cols) < 5:
+        if len(cols) < 3:
             continue
 
         try:
+            # The House Clerk table typically has: Name, Office, Filing Year, Filing
+            # But may also have a Filing Date column in some layouts.
             name = cols[0].get_text(strip=True)
-            office = cols[1].get_text(strip=True)
-            year_text = cols[2].get_text(strip=True)
-            filing_type = cols[3].get_text(strip=True)
+            office = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+            year_text = cols[2].get_text(strip=True) if len(cols) > 2 else str(datetime.now().year)
+            filing_type = cols[3].get_text(strip=True) if len(cols) > 3 else ""
 
-            # The PDF link is usually in the first or last column
+            # The PDF link is on the name (first column) or a dedicated link column
             link_tag = row.find("a", href=True)
             if not link_tag:
                 continue
             href = link_tag["href"]
             pdf_url = urljoin(BASE_URL, href)
 
-            # Filing date is typically the last column
-            date_text = cols[-1].get_text(strip=True)
-            filing_date = _parse_date(date_text)
+            # Filing date: look for a date-like column, otherwise use today
+            filing_date = date.today()
+            if len(cols) > 4:
+                date_text = cols[-1].get_text(strip=True)
+                filing_date = _parse_date(date_text)
 
             year = int(year_text) if year_text.isdigit() else datetime.now().year
 
