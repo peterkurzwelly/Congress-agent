@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 
 from congress_trades.api.schemas import RawTradeRecord
+from congress_trades.config import settings
 from congress_trades.db.models import Filing, Member, Trade
 from congress_trades.db.session import async_session, init_db
 from congress_trades.scoring.anomaly_scorer import enrich_and_score
@@ -285,6 +286,13 @@ async def run_pipeline(
 
     if enrich and new_trade_ids:
         await enrich_trades(new_trade_ids)
+
+    if settings.ENABLE_EMAIL_ALERTS:
+        logger.info("=== Running email alerts ===")
+        from congress_trades.alerts.email_alerts import process_email_alerts
+
+        async with async_session() as session:
+            await process_email_alerts(session)
 
     logger.info("Pipeline complete: %d new trades processed", len(new_trade_ids))
 

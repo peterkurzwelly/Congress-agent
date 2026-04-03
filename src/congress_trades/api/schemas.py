@@ -276,3 +276,43 @@ class TimelinePoint(BaseModel):
     buy_count: int
     sell_count: int
     total_volume: int
+
+
+class PartyComparison(BaseModel):
+    """Trading activity aggregated by political party."""
+
+    party: str
+    total_trades: int
+    total_buy_volume: int
+    total_sell_volume: int
+    avg_anomaly_score: float | None = None
+    unique_tickers: int
+
+
+class TopTicker(BaseModel):
+    """Most traded ticker with aggregate stats."""
+
+    ticker: str
+    trade_count: int
+    buy_count: int
+    sell_count: int
+    unique_members: int
+    avg_anomaly_score: float | None = None
+
+
+class DisclosureDelayBucket(BaseModel):
+    """Histogram bucket for disclosure delay distribution."""
+
+    delay_bucket: str
+    count: int
+
+
+class MemberPerformance(BaseModel):
+    """Member ranked by anomaly score."""
+
+    name: str
+    bioguide_id: str
+    party: str
+    avg_anomaly_score: float | None = None
+    trade_count: int
+    flagged_trades_count: int

@@ -8,8 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from congress_trades.api.schemas import (
     AggregateStats,
+    DisclosureDelayBucket,
+    MemberPerformance,
+    PartyComparison,
     SectorFlow,
     TimelinePoint,
+    TopTicker,
 )
 from congress_trades.config import settings
 from congress_trades.db.models import EnrichedTrade, Filing, Member, Trade
@@ -296,3 +300,202 @@ async def concurrent_trades(
     concurrent_results.sort(key=lambda x: x["member_count"], reverse=True)
 
     return concurrent_results
+
+
+@router.get("/party-comparison", response_model=list[PartyComparison])
+async def party_comparison(db: AsyncSession = Depends(get_db)):
+    """Compare trading activity aggregated by political party."""
+    stmt = (
+        select(
+            Member.party,
+            func.count(Trade.trade_id).label("total_trades"),
+            func.sum(
+                case(
+                    (Trade.trade_type == "Purchase", Trade.amount_max),
+                    else_=0,
+                )
+            ).label("total_buy_volume"),
+            func.sum(
+                case(
+                    (
+                        Trade.trade_type.in_(["Sale", "Sale (Full)", "Sale (Partial)"]),
+                        Trade.amount_max,
+                    ),
+                    else_=0,
+                )
+            ).label("total_sell_volume"),
+            func.avg(EnrichedTrade.anomaly_score).label("avg_anomaly_score"),
+            func.count(func.distinct(Trade.ticker)).label("unique_tickers"),
+        )
+        .join(Member, Trade.member_id == Member.bioguide_id)
+        .outerjoin(EnrichedTrade, Trade.trade_id == EnrichedTrade.trade_id)
+        .where(Member.party.isnot(None))
+        .group_by(Member.party)
+        .order_by(func.count(Trade.trade_id).desc())
+    )
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    return [
+        PartyComparison(
+            party=row[0],
+            total_trades=row[1] or 0,
+            total_buy_volume=row[2] or 0,
+            total_sell_volume=row[3] or 0,
+            avg_anomaly_score=round(row[4], 2) if row[4] is not None else None,
+            unique_tickers=row[5] or 0,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/top-tickers", response_model=list[TopTicker])
+async def top_tickers(
+    limit: int = Query(default=20, ge=1, le=200),
+    days: int = Query(default=90, ge=1, le=3650),
+    db: AsyncSession = Depends(get_db),
+):
+    """Most traded tickers with aggregate stats over a trailing window."""
+    from datetime import date as date_type
+    from datetime import timedelta
+
+    cutoff = date_type.today() - timedelta(days=days)
+
+    stmt = (
+        select(
+            Trade.ticker,
+            func.count(Trade.trade_id).label("trade_count"),
+            func.sum(
+                case(
+                    (Trade.trade_type == "Purchase", 1),
+                    else_=0,
+                )
+            ).label("buy_count"),
+            func.sum(
+                case(
+                    (
+                        Trade.trade_type.in_(["Sale", "Sale (Full)", "Sale (Partial)"]),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("sell_count"),
+            func.count(func.distinct(Trade.member_id)).label("unique_members"),
+            func.avg(EnrichedTrade.anomaly_score).label("avg_anomaly_score"),
+        )
+        .outerjoin(EnrichedTrade, Trade.trade_id == EnrichedTrade.trade_id)
+        .where(Trade.ticker.isnot(None))
+        .where(Trade.trade_date >= cutoff)
+        .group_by(Trade.ticker)
+        .order_by(func.count(Trade.trade_id).desc())
+        .limit(limit)
+    )
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    return [
+        TopTicker(
+            ticker=row[0],
+            trade_count=row[1] or 0,
+            buy_count=row[2] or 0,
+            sell_count=row[3] or 0,
+            unique_members=row[4] or 0,
+            avg_anomaly_score=round(row[5], 2) if row[5] is not None else None,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/disclosure-delays", response_model=list[DisclosureDelayBucket])
+async def disclosure_delays(db: AsyncSession = Depends(get_db)):
+    """Histogram of disclosure delay distribution (days between trade and disclosure)."""
+    stmt = (
+        select(
+            Trade.trade_id,
+            (
+                func.julianday(Filing.disclosure_date) - func.julianday(Trade.trade_date)
+            ).label("delay_days"),
+        )
+        .join(Filing, Trade.filing_id == Filing.filing_id)
+        .where(Filing.disclosure_date.isnot(None))
+        .where(Trade.trade_date.isnot(None))
+    )
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    buckets: dict[str, int] = {
+        "0-7 days": 0,
+        "8-14 days": 0,
+        "15-30 days": 0,
+        "31-45 days": 0,
+        "45+ days": 0,
+    }
+
+    for row in rows:
+        delay = row[1]
+        if delay is None:
+            continue
+        delay = max(0, int(delay))
+        if delay <= 7:
+            buckets["0-7 days"] += 1
+        elif delay <= 14:
+            buckets["8-14 days"] += 1
+        elif delay <= 30:
+            buckets["15-30 days"] += 1
+        elif delay <= 45:
+            buckets["31-45 days"] += 1
+        else:
+            buckets["45+ days"] += 1
+
+    return [
+        DisclosureDelayBucket(delay_bucket=bucket, count=count)
+        for bucket, count in buckets.items()
+    ]
+
+
+@router.get("/member-performance", response_model=list[MemberPerformance])
+async def member_performance(
+    limit: int = Query(default=20, ge=1, le=200),
+    min_trades: int = Query(default=3, ge=1),
+    db: AsyncSession = Depends(get_db),
+):
+    """Members ranked by average anomaly score (highest first)."""
+    stmt = (
+        select(
+            Member.name,
+            Member.bioguide_id,
+            Member.party,
+            func.avg(EnrichedTrade.anomaly_score).label("avg_anomaly_score"),
+            func.count(Trade.trade_id).label("trade_count"),
+            func.sum(
+                case(
+                    (EnrichedTrade.anomaly_score >= 70, 1),
+                    else_=0,
+                )
+            ).label("flagged_trades_count"),
+        )
+        .join(Trade, Member.bioguide_id == Trade.member_id)
+        .join(EnrichedTrade, Trade.trade_id == EnrichedTrade.trade_id)
+        .group_by(Member.bioguide_id, Member.name, Member.party)
+        .having(func.count(Trade.trade_id) >= min_trades)
+        .order_by(func.avg(EnrichedTrade.anomaly_score).desc())
+        .limit(limit)
+    )
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    return [
+        MemberPerformance(
+            name=row[0],
+            bioguide_id=row[1],
+            party=row[2] or "Unknown",
+            avg_anomaly_score=round(row[3], 2) if row[3] is not None else None,
+            trade_count=row[4] or 0,
+            flagged_trades_count=row[5] or 0,
+        )
+        for row in rows
+    ]

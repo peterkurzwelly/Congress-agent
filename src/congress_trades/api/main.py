@@ -12,6 +12,7 @@ from congress_trades.config import settings
 from congress_trades.db.session import init_db
 
 from .routes.analytics import router as analytics_router
+from .routes.feeds import router as feeds_router
 from .routes.members import router as members_router
 from .routes.trades import router as trades_router
 
@@ -60,6 +61,7 @@ app.add_middleware(
 app.include_router(trades_router, prefix="/api/trades", tags=["trades"])
 app.include_router(members_router, prefix="/api/members", tags=["members"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
+app.include_router(feeds_router, prefix="/feeds", tags=["feeds"])
 
 
 @app.get("/health")

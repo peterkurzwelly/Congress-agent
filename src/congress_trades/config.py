@@ -37,5 +37,14 @@ class Settings(BaseSettings):
     # STOCK Act
     STOCK_ACT_DISCLOSURE_DAYS: int = 45
 
+    # Email alerts (SMTP)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    ALERT_EMAIL_FROM: str = ""
+    ALERT_EMAIL_TO: str = ""  # comma-separated list
+    ENABLE_EMAIL_ALERTS: bool = False
+
 
 settings = Settings()
