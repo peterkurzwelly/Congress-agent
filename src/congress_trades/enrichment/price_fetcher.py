@@ -3,7 +3,6 @@
 import asyncio
 import logging
 from datetime import date, timedelta
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +69,7 @@ def _fetch_prices_sync(ticker: str, trade_date: date) -> dict:
         trade_price = result["price_at_trade"]
 
         # Helper to get price N days after trade date
-        def _price_at_offset(days: int) -> Optional[float]:
+        def _price_at_offset(days: int) -> float | None:
             target = trade_date + timedelta(days=days)
             if target > today:
                 return None

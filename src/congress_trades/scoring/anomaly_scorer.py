@@ -14,9 +14,8 @@ from congress_trades.enrichment.committee_mapper import (
     fetch_member_committees,
     get_committee_relevance,
 )
-from congress_trades.enrichment.contract_correlator import find_related_contracts
 from congress_trades.enrichment.price_fetcher import fetch_trade_returns
-from congress_trades.enrichment.ticker_resolver import COMMON_TICKERS, resolve_ticker
+from congress_trades.enrichment.ticker_resolver import resolve_ticker
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,6 @@
 """Layered ticker resolution: local dict -> SEC EDGAR -> Claude fuzzy match."""
 
 import logging
-from typing import Optional
 
 import httpx
 

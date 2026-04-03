@@ -6,21 +6,19 @@
 """
 
 from datetime import date, datetime
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
-
 
 # ---------- Enums ----------
 
 
-class Chamber(str, Enum):
+class Chamber(StrEnum):
     HOUSE = "house"
     SENATE = "senate"
 
 
-class TradeType(str, Enum):
+class TradeType(StrEnum):
     PURCHASE = "Purchase"
     SALE = "Sale"
     SALE_FULL = "Sale (Full)"
@@ -28,7 +26,7 @@ class TradeType(str, Enum):
     EXCHANGE = "Exchange"
 
 
-class AssetType(str, Enum):
+class AssetType(StrEnum):
     STOCK = "Stock"
     BOND = "Bond"
     OPTION = "Option"
@@ -38,20 +36,20 @@ class AssetType(str, Enum):
     OTHER = "Other"
 
 
-class Owner(str, Enum):
+class Owner(StrEnum):
     SELF = "Self"
     SPOUSE = "Spouse"
     JOINT = "Joint"
     DEPENDENT_CHILD = "Dependent Child"
 
 
-class FilingType(str, Enum):
+class FilingType(StrEnum):
     PTR = "ptr"
     ANNUAL = "annual"
     AMENDMENT = "amendment"
 
 
-class AlertType(str, Enum):
+class AlertType(StrEnum):
     NEW_FILING = "new_filing"
     HIGH_ANOMALY = "high_anomaly"
     LARGE_TRADE = "large_trade"
@@ -67,22 +65,22 @@ class RawTradeRecord(BaseModel):
     transaction_date: date
     owner: str
     asset_description: str
-    ticker: Optional[str] = None
+    ticker: str | None = None
     asset_type: str = "Stock"
     tx_type: str  # Purchase, Sale, etc.
     amount_range: str  # "$1,001 - $15,000"
     amount_min: int
     amount_max: int
-    capital_gains_over_200: Optional[bool] = None
-    comment: Optional[str] = None
+    capital_gains_over_200: bool | None = None
+    comment: str | None = None
 
 
 class ParsedFiling(BaseModel):
     """Claude/pdfplumber output for a complete filing."""
 
     politician: str
-    office: Optional[str] = None
-    filing_date: Optional[date] = None
+    office: str | None = None
+    filing_date: date | None = None
     transactions: list[RawTradeRecord]
 
 
@@ -92,17 +90,17 @@ class ParsedFiling(BaseModel):
 class EnrichmentData(BaseModel):
     """Data produced by the Analyst agent for a single trade."""
 
-    resolved_ticker: Optional[str] = None
-    sector: Optional[str] = None
-    industry: Optional[str] = None
-    price_at_trade: Optional[float] = None
-    price_current: Optional[float] = None
-    return_1d: Optional[float] = None
-    return_7d: Optional[float] = None
-    return_30d: Optional[float] = None
-    return_90d: Optional[float] = None
-    committee_relevance_score: Optional[float] = Field(None, ge=0.0, le=1.0)
-    anomaly_score: Optional[float] = Field(None, ge=0.0, le=100.0)
+    resolved_ticker: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    price_at_trade: float | None = None
+    price_current: float | None = None
+    return_1d: float | None = None
+    return_7d: float | None = None
+    return_30d: float | None = None
+    return_90d: float | None = None
+    committee_relevance_score: float | None = Field(None, ge=0.0, le=1.0)
+    anomaly_score: float | None = Field(None, ge=0.0, le=100.0)
     flags: list[str] = Field(default_factory=list)
 
 
@@ -122,10 +120,10 @@ class MemberResponse(BaseModel):
     name: str
     chamber: str
     state: str
-    district: Optional[str] = None
+    district: str | None = None
     party: str
-    committees: Optional[dict] = None
-    photo_url: Optional[str] = None
+    committees: dict | None = None
+    photo_url: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -136,8 +134,8 @@ class MemberSummary(MemberResponse):
     trade_count: int = 0
     total_buy_volume: int = 0
     total_sell_volume: int = 0
-    latest_trade_date: Optional[date] = None
-    avg_anomaly_score: Optional[float] = None
+    latest_trade_date: date | None = None
+    avg_anomaly_score: float | None = None
 
 
 class FilingResponse(BaseModel):
@@ -148,9 +146,9 @@ class FilingResponse(BaseModel):
     filing_url: str
     filing_type: str
     source: str
-    raw_pdf_path: Optional[str] = None
-    parsed_at: Optional[datetime] = None
-    amendment_of: Optional[str] = None
+    raw_pdf_path: str | None = None
+    parsed_at: datetime | None = None
+    amendment_of: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -160,7 +158,7 @@ class TradeResponse(BaseModel):
     filing_id: str
     member_id: str
     asset_description: str
-    ticker: Optional[str] = None
+    ticker: str | None = None
     asset_type: str
     trade_type: str
     trade_date: date
@@ -168,8 +166,8 @@ class TradeResponse(BaseModel):
     amount_range: str
     amount_min: int
     amount_max: int
-    capital_gains_over_200: Optional[bool] = None
-    comment: Optional[str] = None
+    capital_gains_over_200: bool | None = None
+    comment: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -178,31 +176,31 @@ class TradeWithEnrichment(TradeResponse):
     """Full trade with enrichment data and member info — the main API response."""
 
     # Member info (denormalized for convenience)
-    member_name: Optional[str] = None
-    member_party: Optional[str] = None
-    member_state: Optional[str] = None
-    member_chamber: Optional[str] = None
+    member_name: str | None = None
+    member_party: str | None = None
+    member_state: str | None = None
+    member_chamber: str | None = None
 
     # Enrichment
-    resolved_ticker: Optional[str] = None
-    sector: Optional[str] = None
-    industry: Optional[str] = None
-    price_at_trade: Optional[float] = None
-    price_current: Optional[float] = None
-    return_1d: Optional[float] = None
-    return_7d: Optional[float] = None
-    return_30d: Optional[float] = None
-    return_90d: Optional[float] = None
-    committee_relevance_score: Optional[float] = None
-    anomaly_score: Optional[float] = None
+    resolved_ticker: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    price_at_trade: float | None = None
+    price_current: float | None = None
+    return_1d: float | None = None
+    return_7d: float | None = None
+    return_30d: float | None = None
+    return_90d: float | None = None
+    committee_relevance_score: float | None = None
+    anomaly_score: float | None = None
     flags: list[str] = Field(default_factory=list)
 
     # Late filing
-    late_filing: Optional[LateFilingInfo] = None
+    late_filing: LateFilingInfo | None = None
 
     # Filing context
-    filing_date: Optional[date] = None
-    disclosure_date: Optional[date] = None
+    filing_date: date | None = None
+    disclosure_date: date | None = None
 
 
 class AnomalyReport(BaseModel):
@@ -220,18 +218,18 @@ class AnomalyReport(BaseModel):
 class TradeFilterParams(BaseModel):
     """Query parameters for filtering trades."""
 
-    politician: Optional[str] = None
-    ticker: Optional[str] = None
-    chamber: Optional[Chamber] = None
-    party: Optional[str] = None
-    state: Optional[str] = None
-    trade_type: Optional[str] = None
-    asset_type: Optional[str] = None
-    min_amount: Optional[int] = None
-    max_amount: Optional[int] = None
-    date_from: Optional[date] = None
-    date_to: Optional[date] = None
-    min_anomaly_score: Optional[float] = None
+    politician: str | None = None
+    ticker: str | None = None
+    chamber: Chamber | None = None
+    party: str | None = None
+    state: str | None = None
+    trade_type: str | None = None
+    asset_type: str | None = None
+    min_amount: int | None = None
+    max_amount: int | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    min_anomaly_score: float | None = None
     sort_by: str = "trade_date"
     sort_order: str = "desc"
     offset: int = 0
@@ -258,7 +256,7 @@ class AggregateStats(BaseModel):
     total_sells: int
     unique_tickers: int
     unique_politicians: int
-    avg_anomaly_score: Optional[float] = None
+    avg_anomaly_score: float | None = None
     late_filings_count: int = 0
 
 

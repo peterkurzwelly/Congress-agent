@@ -17,10 +17,10 @@ from sqlalchemy import select
 from congress_trades.api.schemas import RawTradeRecord
 from congress_trades.db.models import Filing, Member, Trade
 from congress_trades.db.session import async_session, init_db
+from congress_trades.scoring.anomaly_scorer import enrich_and_score
 from congress_trades.scrapers.house_clerk import scrape_house_disclosures
 from congress_trades.scrapers.pdf_parser import parse_filing
 from congress_trades.scrapers.senate_efd import scrape_senate_full
-from congress_trades.scoring.anomaly_scorer import enrich_and_score
 
 logger = logging.getLogger(__name__)
 

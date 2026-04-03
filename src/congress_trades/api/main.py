@@ -73,7 +73,7 @@ if _FRONTEND_DIR.is_dir():
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        """Catch-all route: serve static file if it exists, otherwise index.html for client-side routing."""
+        """Catch-all route: serve static file if it exists, otherwise index.html for SPA routing."""
         file_path = _FRONTEND_DIR / full_path
         if file_path.is_file():
             return FileResponse(file_path)

@@ -191,8 +191,9 @@ def _parse_collapsed_row(cell_text: str) -> RawTradeRecord | None:
     These rows look like:
     'SP Rollins, Inc. Common Stock (ROL) P 12/12/2024 01/08/2025 $15,001 -\\n[ST] $50,000\\n...'
 
-    Or with CUSIP wrapping:
-    'US TREASURY BILL DUE 03/20/25 P 12/03/2024 01/08/2024 $15,001 -\\n(912797KJ5) [GS] $50,000\\n...'
+    Or with CUSIP wrapping (CUSIP on next line):
+    'US TREASURY BILL DUE 03/20/25 P 12/03/2024 01/08/2024 $15,001 -
+    (912797KJ5) [GS] $50,000...'
 
     The structure is roughly:
     [Owner] <Asset description with (TICKER) [TYPE]> <TxType> <Date> <NotifDate> <Amount>
@@ -351,7 +352,8 @@ def parse_pdf_structured(pdf_path: str | Path) -> list[RawTradeRecord] | None:
 def _is_house_ptr_header(headers: list[str]) -> bool:
     """Check if the table headers match the House PTR format."""
     header_text = " ".join(headers)
-    # House PTR headers: ID, Owner, Asset, Transaction Type, Date, Notification Date, Amount, Cap. Gains
+    # House PTR headers: ID, Owner, Asset, Transaction Type, Date, Notification Date,
+    # Amount, Cap. Gains
     return ("id" in headers and "owner" in header_text and "asset" in header_text) or (
         "asset" in header_text and "transaction" in header_text and "notification" in header_text
     )

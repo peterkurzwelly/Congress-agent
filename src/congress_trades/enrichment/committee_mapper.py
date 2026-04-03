@@ -1,7 +1,6 @@
 """Maps Congress members to committee assignments and committees to sectors."""
 
 import logging
-from typing import Optional
 
 import httpx
 

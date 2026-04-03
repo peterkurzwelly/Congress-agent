@@ -1,7 +1,5 @@
 """Trade endpoints."""
 
-from datetime import timedelta
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -139,18 +137,18 @@ def _build_filtered_query(params: TradeFilterParams):
 
 @router.get("/", response_model=PaginatedResponse)
 async def list_trades(
-    politician: Optional[str] = None,
-    ticker: Optional[str] = None,
-    chamber: Optional[str] = None,
-    party: Optional[str] = None,
-    state: Optional[str] = None,
-    trade_type: Optional[str] = None,
-    asset_type: Optional[str] = None,
-    min_amount: Optional[int] = None,
-    max_amount: Optional[int] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    min_anomaly_score: Optional[float] = None,
+    politician: str | None = None,
+    ticker: str | None = None,
+    chamber: str | None = None,
+    party: str | None = None,
+    state: str | None = None,
+    trade_type: str | None = None,
+    asset_type: str | None = None,
+    min_amount: int | None = None,
+    max_amount: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    min_anomaly_score: float | None = None,
     sort_by: str = "trade_date",
     sort_order: str = "desc",
     offset: int = Query(default=0, ge=0),

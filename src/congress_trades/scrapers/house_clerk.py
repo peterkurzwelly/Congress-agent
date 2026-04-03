@@ -104,10 +104,6 @@ def _parse_search_results(html: str) -> list[dict[str, Any]]:
         logger.info("No results table found in HTML response")
         return results
 
-    # Detect column layout from header row
-    header_row = table.find("tr")
-    headers = [th.get_text(strip=True).lower() for th in header_row.find_all(["th", "td"])] if header_row else []
-
     rows = table.find_all("tr")[1:]  # skip header row
     for row in rows:
         cols = row.find_all("td")

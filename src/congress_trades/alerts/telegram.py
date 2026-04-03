@@ -8,8 +8,8 @@ and records every sent alert in the database.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -273,7 +273,7 @@ async def send_alert(
         raise
 
     # Record each alert type in the DB
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for at in alert_types:
         alert = Alert(
             trade_id=trade_id,

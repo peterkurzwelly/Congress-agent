@@ -1,7 +1,6 @@
 """Analytics endpoints."""
 
 from datetime import date as date_type
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import case, func, select
@@ -143,8 +142,8 @@ async def sector_flows(db: AsyncSession = Depends(get_db)):
 
 @router.get("/timeline", response_model=list[TimelinePoint])
 async def timeline(
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Trade volume aggregated by date."""
@@ -202,22 +201,21 @@ async def concurrent_trades(
     # Alias for self-join
     from sqlalchemy.orm import aliased
 
-    T1 = aliased(Trade, name="t1")
-    T2 = aliased(Trade, name="t2")
+    t1 = aliased(Trade, name="t1")  # noqa: N806 — alias intentionally short
 
     # Find ticker + member pairs where multiple distinct members traded the
     # same ticker within the window
     stmt = (
         select(
-            T1.ticker,
-            func.count(func.distinct(T1.member_id)).label("member_count"),
-            func.count(T1.trade_id).label("trade_count"),
-            func.min(T1.trade_date).label("first_trade"),
-            func.max(T1.trade_date).label("last_trade"),
+            t1.ticker,
+            func.count(func.distinct(t1.member_id)).label("member_count"),
+            func.count(t1.trade_id).label("trade_count"),
+            func.min(t1.trade_date).label("first_trade"),
+            func.max(t1.trade_date).label("last_trade"),
         )
-        .where(T1.ticker.isnot(None))
-        .group_by(T1.ticker)
-        .having(func.count(func.distinct(T1.member_id)) >= 2)
+        .where(t1.ticker.isnot(None))
+        .group_by(t1.ticker)
+        .having(func.count(func.distinct(t1.member_id)) >= 2)
     )
 
     # We filter for tickers where the date spread is within the window

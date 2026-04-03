@@ -1,7 +1,5 @@
 """Member endpoints."""
 
-from datetime import timedelta
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, func, select
@@ -12,11 +10,9 @@ from congress_trades.api.schemas import (
     MemberResponse,
     MemberSummary,
     PaginatedResponse,
-    TradeWithEnrichment,
-    LateFilingInfo,
 )
 from congress_trades.config import settings
-from congress_trades.db.models import EnrichedTrade, Filing, Member, Trade
+from congress_trades.db.models import Filing, Member, Trade
 from congress_trades.db.session import get_db
 
 router = APIRouter()
@@ -79,9 +75,9 @@ def _row_to_member_summary(row) -> MemberSummary:
 async def list_members(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, le=500),
-    chamber: Optional[str] = None,
-    party: Optional[str] = None,
-    state: Optional[str] = None,
+    chamber: str | None = None,
+    party: str | None = None,
+    state: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """List all members with trade counts."""
