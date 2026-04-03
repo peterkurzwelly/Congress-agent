@@ -5,24 +5,52 @@ services:
       - "8000:8000"
     volumes:
       - db-data:/app/data
-      - ./.env:/app/.env:ro
+      - pdf-cache:/app/pdfs
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/congress_trades.db
+      - ENABLE_SCHEDULER=true
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   scraper:
     build: .
-    command: uv run python -m congress_trades.pipeline
+    command: uv run python -m congress_trades.pipeline --house-only
     volumes:
       - db-data:/app/data
-      - ./.env:/app/.env:ro
+      - pdf-cache:/app/pdfs
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/congress_trades.db
     depends_on:
-      - app
-    restart: unless-stopped
+      app:
+        condition: service_healthy
     profiles:
       - with-scraper
 
+  backfill:
+    build: .
+    command: uv run python scripts/backfill.py --years 2023 2024 2025 --senate --enrich
+    volumes:
+      - db-data:/app/data
+      - pdf-cache:/app/pdfs
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/congress_trades.db
+    depends_on:
+      app:
+        condition: service_healthy
+    profiles:
+      - backfill
+
 volumes:
   db-data:
+  pdf-cache:
