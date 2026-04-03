@@ -193,44 +193,46 @@ async def _accept_agreement(client: httpx.AsyncClient) -> None:
     logger.info("Senate EFD agreement accepted")
 
 
-def _parse_search_results(html: str) -> list[dict[str, Any]]:
-    """Parse the search results page for filing links.
+def _parse_search_results_json(data: list[list[str]]) -> list[dict[str, Any]]:
+    """Parse the JSON data array from the /search/report/data/ AJAX endpoint.
+
+    Each entry in *data* is a list of strings (DataTables server-side format):
+        [0] First name (may include middle name)
+        [1] Last name (may include suffix)
+        [2] Filer type (e.g. "Senator")
+        [3] Report type — HTML with an <a> link, e.g.
+            '<a href="/search/view/ptr/.../">Periodic Transaction Report for ...</a>'
+        [4] Date submitted (e.g. "08/15/2024")
 
     Returns a list of dicts with filing_url, name, filing_date, filing_type.
     """
-    soup = BeautifulSoup(html, "html.parser")
     results: list[dict[str, Any]] = []
 
-    table = soup.find("table", class_="table") or soup.find("table")
-    if not table:
-        logger.info("No results table found in Senate search results")
-        return results
-
-    rows = table.find_all("tr")[1:]  # skip header
-    for row in rows:
-        cols = row.find_all("td")
-        if len(cols) < 4:
+    for row in data:
+        if len(row) < 5:
             continue
 
         try:
-            # Name is in the first column
-            name = cols[0].get_text(strip=True)
+            first_name = row[0].strip()
+            last_name = row[1].strip()
+            name = f"{first_name} {last_name}".strip()
 
-            # Filing link
-            link = row.find("a", href=True)
+            filer_type = row[2].strip()
+
+            # Row[3] contains HTML — parse the <a> tag to extract URL and report type
+            report_html = row[3]
+            soup = BeautifulSoup(report_html, "html.parser")
+            link = soup.find("a", href=True)
             if not link:
+                logger.debug("No link found in report column: %s", report_html)
                 continue
+
             href = str(link["href"])
             filing_url = href if href.startswith("http") else BASE_URL + href
+            filing_type_text = link.get_text(strip=True)
 
-            # Office / filer type
-            office = cols[1].get_text(strip=True) if len(cols) > 1 else ""
-
-            # Filing type
-            filing_type_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
-
-            # Date
-            date_text = cols[3].get_text(strip=True) if len(cols) > 3 else ""
+            # Row[4] is the date
+            date_text = row[4].strip()
             filing_date = _parse_date_text(date_text) if date_text else date.today()
 
             filing_id = _generate_filing_id(filing_url)
@@ -238,7 +240,7 @@ def _parse_search_results(html: str) -> list[dict[str, Any]]:
             results.append(
                 {
                     "name": name,
-                    "office": office,
+                    "office": filer_type,
                     "filing_type": filing_type_text,
                     "filing_url": filing_url,
                     "filing_date": filing_date,
@@ -363,6 +365,59 @@ def _parse_ptr_table(html: str) -> list[RawTradeRecord]:
     return records
 
 
+async def _fetch_filings_page(
+    client: httpx.AsyncClient,
+    csrf_token: str,
+    *,
+    start: int = 0,
+    length: int = 100,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    first_name: str = "",
+    last_name: str = "",
+) -> dict[str, Any]:
+    """Fetch one page of results from the AJAX endpoint.
+
+    Returns the raw JSON dict with keys: draw, recordsTotal,
+    recordsFiltered, data, result.
+    """
+    data_url = f"{BASE_URL}/search/report/data/"
+
+    payload = {
+        "start": str(start),
+        "length": str(length),
+        "report_types": "[11]",  # Periodic Transaction Report
+        "filter_types": "[1]",   # Senator
+        "first_name": first_name,
+        "last_name": last_name,
+    }
+
+    if date_from is not None:
+        payload["submitted_start_date"] = (
+            date_from.strftime("%m/%d/%Y") + " 00:00:00"
+        )
+    if date_to is not None:
+        payload["submitted_end_date"] = (
+            date_to.strftime("%m/%d/%Y") + " 23:59:59"
+        )
+
+    response = await _request_with_backoff(
+        client,
+        "POST",
+        data_url,
+        data=payload,
+        headers={
+            **HEADERS,
+            "Referer": f"{BASE_URL}/search/",
+            "Origin": BASE_URL,
+            "X-CSRFToken": csrf_token,
+            "X-Requested-With": "XMLHttpRequest",
+        },
+    )
+
+    return response.json()  # type: ignore[no-any-return]
+
+
 async def scrape_senate_filings(
     date_from: date | None = None,
     date_to: date | None = None,
@@ -403,39 +458,58 @@ async def scrape_senate_filings(
         # Step 1+2: Accept agreement, get session
         await _accept_agreement(client)
 
-        # Step 3: POST search with filters
-        search_url = f"{BASE_URL}/search/"
-        search_data = {
-            "filer_type": "1",  # Senator
-            "report_type": "11",  # Periodic Transaction Report
-            "submitted_start_date": date_from.strftime("%m/%d/%Y"),
-            "submitted_end_date": date_to.strftime("%m/%d/%Y"),
-            "first_name": first_name,
-            "last_name": last_name,
-        }
-
-        # We need the CSRF token for the search POST too
-        search_page = await _request_with_backoff(client, "GET", search_url)
-        csrf_token = _extract_csrf_token(search_page.text)
-
-        search_data["csrfmiddlewaretoken"] = csrf_token
+        # The CSRF token for the AJAX endpoint comes from the csrftoken cookie
+        csrf_token = client.cookies.get("csrftoken", domain="efdsearch.senate.gov")
+        if not csrf_token:
+            # Fallback: visit the search page and extract from cookie/HTML
+            search_page = await _request_with_backoff(
+                client, "GET", f"{BASE_URL}/search/",
+            )
+            csrf_token = client.cookies.get("csrftoken") or ""
+            if not csrf_token:
+                csrf_token = _extract_csrf_token(search_page.text)
 
         logger.info(
             "Searching Senate filings: %s to %s",
             date_from.isoformat(),
             date_to.isoformat(),
         )
-        response = await _request_with_backoff(
-            client,
-            "POST",
-            search_url,
-            data=search_data,
-            headers={**HEADERS, "Referer": search_url},
-        )
 
-        filings = _parse_search_results(response.text)
-        logger.info("Found %d Senate filings", len(filings))
-        return filings
+        # Paginate through results
+        all_filings: list[dict[str, Any]] = []
+        start = 0
+        page_size = 100
+
+        while True:
+            result = await _fetch_filings_page(
+                client,
+                csrf_token,
+                start=start,
+                length=page_size,
+                date_from=date_from,
+                date_to=date_to,
+                first_name=first_name,
+                last_name=last_name,
+            )
+
+            data = result.get("data", [])
+            filings = _parse_search_results_json(data)
+            all_filings.extend(filings)
+
+            records_total = result.get("recordsFiltered", 0)
+            logger.debug(
+                "Fetched %d filings (start=%d, total=%d)",
+                len(filings),
+                start,
+                records_total,
+            )
+
+            start += page_size
+            if start >= records_total or not data:
+                break
+
+        logger.info("Found %d Senate filings", len(all_filings))
+        return all_filings
 
 
 async def scrape_senate_ptr(

@@ -48,6 +48,28 @@ TX_TYPE_MAP: dict[str, str] = {
     "exchange": "Exchange",
 }
 
+# Owner abbreviation mapping (House PTR format)
+OWNER_MAP: dict[str, str] = {
+    "SP": "Spouse",
+    "JT": "Joint",
+    "DC": "Dependent Child",
+    "Self": "Self",
+    "": "Self",
+}
+
+# Asset type abbreviation mapping (House PTR bracket codes)
+ASSET_TYPE_MAP: dict[str, str] = {
+    "ST": "Stock",
+    "OP": "Option",
+    "EF": "Fund",
+    "MF": "Fund",
+    "BN": "Bond",
+    "GS": "Bond",  # Government Securities
+    "OT": "Other",
+    "CR": "Crypto",
+    "RE": "Real Estate",
+}
+
 CLAUDE_EXTRACTION_PROMPT = """\
 You are an expert at extracting structured data from US Congressional financial \
 disclosure forms (STOCK Act periodic transaction reports).
@@ -140,6 +162,131 @@ def _normalize_tx_type(raw: str) -> str:
     return TX_TYPE_MAP.get(stripped, TX_TYPE_MAP.get(stripped.lower(), stripped))
 
 
+def _normalize_owner(raw: str) -> str:
+    """Normalize owner abbreviation to full name."""
+    stripped = raw.strip()
+    return OWNER_MAP.get(stripped, stripped if stripped else "Self")
+
+
+def _extract_ticker(asset_text: str) -> str | None:
+    """Extract ticker symbol from asset description like 'NVIDIA Corp (NVDA) [ST]'."""
+    match = re.search(r"\(([A-Z]{1,5})\)", asset_text)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _extract_asset_type_from_brackets(asset_text: str) -> str:
+    """Extract asset type from bracket code like '[ST]', '[OP]', '[GS]'."""
+    match = re.search(r"\[([A-Z]{2})\]", asset_text)
+    if match:
+        code = match.group(1)
+        return ASSET_TYPE_MAP.get(code, "Other")
+    return "Stock"
+
+
+def _parse_collapsed_row(cell_text: str) -> RawTradeRecord | None:
+    """Parse a House PTR row where all columns collapsed into a single cell.
+
+    These rows look like:
+    'SP Rollins, Inc. Common Stock (ROL) P 12/12/2024 01/08/2025 $15,001 -\\n[ST] $50,000\\n...'
+
+    The structure is roughly:
+    [Owner] <Asset description with (TICKER) [TYPE]> <TxType> <Date> <NotifDate> <Amount>
+    followed by optional filing status lines.
+    """
+    if not cell_text or not cell_text.strip():
+        return None
+
+    # Take only the first meaningful line(s) -- strip filing status lines
+    # Filing status lines contain null bytes or start with "F" followed by nulls
+    lines = cell_text.split("\n")
+    # Keep lines until we hit a filing status or subholding line
+    data_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Skip lines with null bytes (filing status, subholding info)
+        if "\x00" in stripped:
+            continue
+        data_lines.append(stripped)
+
+    if not data_lines:
+        return None
+
+    # Rejoin the data portion
+    data_text = " ".join(data_lines)
+
+    # Extract dates (MM/DD/YYYY)
+    date_matches = re.findall(r"(\d{1,2}/\d{1,2}/\d{2,4})", data_text)
+    if not date_matches:
+        return None
+
+    # Extract amount range
+    amount_match = re.search(r"(\$[\d,]+)\s*[-–]\s*(\$[\d,]+)", data_text)
+    if not amount_match:
+        return None
+
+    amount_text = f"{amount_match.group(1)} - {amount_match.group(2)}"
+    amount_range, amount_min, amount_max = _parse_amount(amount_text)
+
+    # Extract transaction type (P, S, E, S (Full), S (Partial)) - single letter before a date
+    tx_type = "Purchase"
+    tx_match = re.search(
+        r"\]\s*(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+\d{1,2}/", data_text
+    )
+    if not tx_match:
+        # Try without bracket prefix
+        tx_match = re.search(
+            r"\b(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+\d{1,2}/", data_text
+        )
+    if tx_match:
+        tx_type = _normalize_tx_type(tx_match.group(1).strip())
+
+    transaction_date = _parse_date_safe(date_matches[0])
+
+    # Extract owner: first token if it's a known abbreviation
+    owner = "Self"
+    first_token = data_text.split()[0] if data_text.split() else ""
+    if first_token in OWNER_MAP:
+        owner = OWNER_MAP[first_token]
+
+    # Extract asset description: everything between owner and tx_type
+    # Remove the owner prefix, dates, amounts, and tx type to get asset
+    asset_desc = data_text
+    # Remove owner prefix
+    if first_token in OWNER_MAP:
+        asset_desc = asset_desc[len(first_token):].strip()
+    # Remove everything from the tx_type letter onwards
+    if tx_match:
+        asset_desc = asset_desc[:asset_desc.find(tx_match.group(0))].strip()
+
+    # Extract ticker and asset type from the asset description
+    ticker = _extract_ticker(asset_desc)
+    asset_type = _extract_asset_type_from_brackets(asset_desc)
+
+    if not asset_desc:
+        asset_desc = "Unknown Asset"
+
+    # Cap gains
+    cap_gains: bool | None = None
+
+    return RawTradeRecord(
+        transaction_date=transaction_date,
+        owner=owner,
+        asset_description=asset_desc[:200],
+        ticker=ticker,
+        asset_type=asset_type,
+        tx_type=tx_type,
+        amount_range=amount_range,
+        amount_min=amount_min,
+        amount_max=amount_max,
+        capital_gains_over_200=cap_gains,
+        comment=None,
+    )
+
+
 def parse_pdf_structured(pdf_path: str | Path) -> list[RawTradeRecord] | None:
     """Parse a machine-readable PDF using pdfplumber.
 
@@ -198,71 +345,158 @@ def parse_pdf_structured(pdf_path: str | Path) -> list[RawTradeRecord] | None:
         return None
 
 
+def _is_house_ptr_header(headers: list[str]) -> bool:
+    """Check if the table headers match the House PTR format."""
+    header_text = " ".join(headers)
+    # House PTR headers: ID, Owner, Asset, Transaction Type, Date, Notification Date, Amount, Cap. Gains
+    return ("id" in headers and "owner" in header_text and "asset" in header_text) or (
+        "asset" in header_text and "transaction" in header_text and "notification" in header_text
+    )
+
+
+def _is_filing_status_row(row: list[str | None]) -> bool:
+    """Check if a row is a filing status / subholding info row (not a transaction)."""
+    for cell in row:
+        if cell and "\x00" in str(cell):
+            return True
+    # Rows where all cells after [0] are None and cell[0] has no date/amount
+    non_null = [c for c in row if c and str(c).strip()]
+    if len(non_null) <= 1 and non_null:
+        text = str(non_null[0])
+        if not re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", text):
+            if not re.search(r"\$[\d,]+", text):
+                return True
+    return False
+
+
 def _parse_table_rows(table: list[list[str | None]]) -> list[RawTradeRecord]:
     """Parse a pdfplumber-extracted table into RawTradeRecords.
 
-    Expects columns roughly matching:
-    [Owner, Asset, Ticker, Type, Date, Amount, Cap Gains, Comment]
-    but handles various column orderings by heuristic detection.
+    Handles two formats:
+    1. House PTR tables with columns: ID, Owner, Asset, Transaction Type, Date,
+       Notification Date, Amount, Cap. Gains > $200?
+    2. Generic tables with various column orderings.
+
+    Also handles "collapsed" rows where pdfplumber puts all data into a single cell.
     """
     if not table or len(table) < 2:
         return []
 
     records: list[RawTradeRecord] = []
 
-    # Use first row as headers for column detection
-    headers = [str(h or "").lower().strip() for h in table[0]]
+    # Normalize headers: join multiline headers and lowercase
+    raw_headers = [str(h or "").replace("\n", " ").lower().strip() for h in table[0]]
+
+    # Detect House PTR format
+    is_house_ptr = _is_house_ptr_header(raw_headers)
 
     col_map: dict[str, int] = {}
-    for idx, h in enumerate(headers):
-        if "date" in h and "transaction" in h:
-            col_map["date"] = idx
-        elif h in ("date",) and "date" not in col_map:
-            col_map["date"] = idx
-        elif "owner" in h:
-            col_map["owner"] = idx
-        elif "ticker" in h or "symbol" in h:
-            col_map["ticker"] = idx
-        elif "asset" in h and ("name" in h or "description" in h):
-            col_map["asset"] = idx
-        elif "type" in h and "asset" in h:
-            col_map["asset_type"] = idx
-        elif "type" in h and "asset" not in h:
-            col_map["tx_type"] = idx
-        elif "amount" in h:
-            col_map["amount"] = idx
-        elif "capital" in h or "gain" in h:
-            col_map["cap_gains"] = idx
-        elif "comment" in h:
-            col_map["comment"] = idx
 
-    # If we could not map at least date + asset, skip this table
-    if "date" not in col_map and "asset" not in col_map:
+    if is_house_ptr:
+        # House PTR has fixed column order: ID, Owner, Asset, Transaction Type,
+        # Date, Notification Date, Amount, Cap. Gains > $200?
+        for idx, h in enumerate(raw_headers):
+            if h == "id":
+                col_map["id"] = idx
+            elif "owner" in h:
+                col_map["owner"] = idx
+            elif "asset" in h:
+                col_map["asset"] = idx
+            elif "transaction" in h:
+                col_map["tx_type"] = idx
+            elif h == "date" and "date" not in col_map:
+                col_map["date"] = idx
+            elif "notification" in h:
+                col_map["notif_date"] = idx
+            elif "amount" in h:
+                col_map["amount"] = idx
+            elif "cap" in h or "gain" in h:
+                col_map["cap_gains"] = idx
+    else:
+        # Generic column detection (original logic, improved)
+        for idx, h in enumerate(raw_headers):
+            if ("date" in h and "transaction" in h) or (
+                "trade" in h and "date" in h
+            ):
+                col_map["date"] = idx
+            elif h in ("date",) and "date" not in col_map:
+                col_map["date"] = idx
+            elif "owner" in h:
+                col_map["owner"] = idx
+            elif "ticker" in h or "symbol" in h:
+                col_map["ticker"] = idx
+            elif "asset" in h:
+                col_map["asset"] = idx
+            elif "type" in h and "asset" in h:
+                col_map["asset_type"] = idx
+            elif "type" in h and "transaction" not in h and "asset" not in h:
+                col_map["tx_type"] = idx
+            elif "transaction" in h and "type" in h:
+                col_map["tx_type"] = idx
+            elif "amount" in h:
+                col_map["amount"] = idx
+            elif "capital" in h or "gain" in h:
+                col_map["cap_gains"] = idx
+            elif "comment" in h or "description" in h:
+                col_map["comment"] = idx
+
+    # For House PTR, we need at least asset or can fallback to collapsed row parsing
+    # For generic, we need date + asset
+    if not is_house_ptr and "date" not in col_map and "asset" not in col_map:
         return []
 
     for row in table[1:]:
         if not row or all(cell is None or str(cell).strip() == "" for cell in row):
             continue
 
+        # Skip filing status / subholding rows
+        if _is_filing_status_row(row):
+            continue
+
         try:
+            # Check if this is a collapsed row (all data in first cell, rest are None)
+            non_null_cells = [(i, str(c).strip()) for i, c in enumerate(row)
+                              if c is not None and str(c).strip()]
+            all_in_first = (
+                len(non_null_cells) == 1
+                and non_null_cells[0][0] == 0
+                and re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", non_null_cells[0][1])
+            )
+
+            if all_in_first:
+                # Collapsed row: parse from single cell text
+                record = _parse_collapsed_row(non_null_cells[0][1])
+                if record:
+                    records.append(record)
+                continue
+
+            # Normal structured row -- extract by column mapping
             def _get(key: str, default: str = "") -> str:
                 idx = col_map.get(key)
                 if idx is not None and idx < len(row):
-                    return str(row[idx] or "").strip()
+                    val = row[idx]
+                    if val is not None:
+                        # Collapse internal newlines
+                        return str(val).replace("\n", " ").strip()
                 return default
 
             date_text = _get("date")
             if not date_text:
                 continue
 
-            owner = _get("owner", "Self")
-            ticker = _get("ticker") or None
+            owner_raw = _get("owner", "Self")
             asset_desc = _get("asset", "Unknown Asset")
-            asset_type = _get("asset_type", "Stock")
             tx_type_raw = _get("tx_type", "Purchase")
             amount_text = _get("amount", "$1,001 - $15,000")
             cap_gains_text = _get("cap_gains")
             comment = _get("comment") or None
+
+            # For House PTR, extract ticker and asset type from asset description
+            ticker = _get("ticker") or _extract_ticker(asset_desc)
+            asset_type = _extract_asset_type_from_brackets(asset_desc)
+
+            # Normalize owner
+            owner = _normalize_owner(owner_raw)
 
             tx_type = _normalize_tx_type(tx_type_raw)
             transaction_date = _parse_date_safe(date_text)
@@ -307,30 +541,83 @@ def _parse_text_based(text: str) -> list[RawTradeRecord]:
     """Attempt to parse transactions from raw text when table extraction fails.
 
     This is a best-effort heuristic parser for text-based PDFs where
-    pdfplumber cannot detect table structure.
+    pdfplumber cannot detect table structure. Handles House PTR text format
+    where transaction lines contain owner, asset, tx type, dates, and amounts.
     """
     records: list[RawTradeRecord] = []
 
+    # Clean null bytes from text
+    text = text.replace("\x00", "")
+
     # Look for transaction patterns in the text
-    # Common pattern: date followed by asset info and amount range
-    date_pattern = re.compile(
-        r"(\d{1,2}/\d{1,2}/\d{2,4})"
-    )
-    amount_pattern = re.compile(
-        r"(\$[\d,]+\s*[-–]\s*\$[\d,]+|Over\s*\$[\d,]+)"
+    date_pattern = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})")
+    amount_pattern = re.compile(r"(\$[\d,]+\s*[-–]\s*\$[\d,]+|Over\s*\$[\d,]+)")
+
+    # House PTR line pattern: [Owner] <Asset (TICKER) [TYPE]> <P|S|E> <Date> <Date> <Amount>
+    house_ptr_pattern = re.compile(
+        r"^(?:(SP|JT|DC|Self)\s+)?"  # optional owner
+        r"(.+?)\s+"  # asset description (non-greedy)
+        r"(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+"  # transaction type
+        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+"  # transaction date
+        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+"  # notification date
+        r"(\$[\d,]+\s*[-–]\s*\$[\d,]+)",  # amount range
+        re.MULTILINE,
     )
 
+    # First try the House PTR pattern on the full text
+    for match in house_ptr_pattern.finditer(text):
+        try:
+            owner_raw = match.group(1) or "Self"
+            asset_desc = match.group(2).strip()
+            tx_type_raw = match.group(3).strip()
+            date_text = match.group(4)
+            amount_text = match.group(6)
+
+            owner = _normalize_owner(owner_raw)
+            ticker = _extract_ticker(asset_desc)
+            asset_type = _extract_asset_type_from_brackets(asset_desc)
+            tx_type = _normalize_tx_type(tx_type_raw)
+            transaction_date = _parse_date_safe(date_text)
+            amount_range, amount_min, amount_max = _parse_amount(amount_text)
+
+            records.append(
+                RawTradeRecord(
+                    transaction_date=transaction_date,
+                    owner=owner,
+                    asset_description=asset_desc[:200],
+                    ticker=ticker,
+                    asset_type=asset_type,
+                    tx_type=tx_type,
+                    amount_range=amount_range,
+                    amount_min=amount_min,
+                    amount_max=amount_max,
+                )
+            )
+        except Exception as exc:
+            logger.debug("House PTR text parse failed: %s", exc)
+
+    if records:
+        return records
+
+    # Fallback: generic line-by-line parsing
     lines = text.split("\n")
     i = 0
     while i < len(lines):
         line = lines[i].strip()
+
+        # Skip lines with null bytes or that are clearly not transactions
+        if not line or len(line) < 10:
+            i += 1
+            continue
+
         date_match = date_pattern.search(line)
         amount_match = amount_pattern.search(line)
 
         # Also check next few lines for amount if not on same line
         if date_match and not amount_match:
             for j in range(1, min(4, len(lines) - i)):
-                amount_match = amount_pattern.search(lines[i + j])
+                next_line = lines[i + j].strip()
+                amount_match = amount_pattern.search(next_line)
                 if amount_match:
                     line = line + " " + " ".join(
                         lines[i + k].strip() for k in range(1, j + 1)
@@ -344,27 +631,47 @@ def _parse_text_based(text: str) -> list[RawTradeRecord]:
                     amount_match.group(1)
                 )
 
-                # Try to extract ticker (uppercase 1-5 letter word)
-                ticker_match = re.search(r"\b([A-Z]{1,5})\b", line)
-                ticker = ticker_match.group(1) if ticker_match else None
+                # Extract ticker from parentheses (not just any uppercase word)
+                ticker = _extract_ticker(line)
+
+                # Extract asset type from brackets
+                asset_type = _extract_asset_type_from_brackets(line)
+
+                # Detect owner
+                owner = "Self"
+                owner_match = re.match(r"^(SP|JT|DC)\s+", line)
+                if owner_match:
+                    owner = _normalize_owner(owner_match.group(1))
 
                 # Determine transaction type
                 tx_type = "Purchase"
-                line_lower = line.lower()
-                if "sale (full)" in line_lower or "s (full)" in line_lower:
-                    tx_type = "Sale (Full)"
-                elif "sale (partial)" in line_lower or "s (partial)" in line_lower:
-                    tx_type = "Sale (Partial)"
-                elif "sale" in line_lower:
-                    tx_type = "Sale"
-                elif "exchange" in line_lower:
-                    tx_type = "Exchange"
+                # Look for single-letter tx type before a date
+                tx_match = re.search(
+                    r"\b(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+\d{1,2}/",
+                    line,
+                )
+                if tx_match:
+                    tx_type = _normalize_tx_type(tx_match.group(1).strip())
+                else:
+                    line_lower = line.lower()
+                    if "sale (full)" in line_lower:
+                        tx_type = "Sale (Full)"
+                    elif "sale (partial)" in line_lower:
+                        tx_type = "Sale (Partial)"
+                    elif "sale" in line_lower:
+                        tx_type = "Sale"
+                    elif "exchange" in line_lower:
+                        tx_type = "Exchange"
 
-                # Use a portion of the line as asset description
+                # Build asset description: remove date, amount, tx type
                 asset_desc = line
-                # Remove the date and amount from the description
                 asset_desc = date_pattern.sub("", asset_desc)
                 asset_desc = amount_pattern.sub("", asset_desc)
+                # Remove owner prefix
+                if owner_match:
+                    asset_desc = asset_desc[len(owner_match.group(0)):]
+                # Remove single-letter tx type
+                asset_desc = re.sub(r"\s+[PSED]\s+", " ", asset_desc)
                 asset_desc = asset_desc.strip().strip("-").strip()
                 if not asset_desc:
                     asset_desc = "Unknown Asset"
@@ -372,10 +679,10 @@ def _parse_text_based(text: str) -> list[RawTradeRecord]:
                 records.append(
                     RawTradeRecord(
                         transaction_date=transaction_date,
-                        owner="Self",
+                        owner=owner,
                         asset_description=asset_desc[:200],
                         ticker=ticker,
-                        asset_type="Stock",
+                        asset_type=asset_type,
                         tx_type=tx_type,
                         amount_range=amount_range,
                         amount_min=amount_min,
