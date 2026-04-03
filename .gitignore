@@ -28,8 +28,7 @@ env/
 *.sqlite3
 
 # PDFs (downloaded filings -- large, don't commit)
-data/pdfs/
-data/raw/
+data/
 
 # OS
 .DS_Store
