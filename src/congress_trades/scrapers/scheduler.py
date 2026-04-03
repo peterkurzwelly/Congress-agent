@@ -6,7 +6,6 @@ last-seen filing ID tracking.
 """
 
 import logging
-from datetime import date, datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -28,49 +27,20 @@ _seen_senate_filing_ids: set[str] = set()
 async def scrape_house() -> None:
     """Scheduled job: scrape House financial disclosures.
 
-    Downloads new filings, parses PDFs, and stores results.
-    Skips filings whose IDs have already been processed.
+    Calls the real pipeline function to scrape, parse PDFs, store in DB,
+    then enriches the newly discovered trades.
     """
-    from congress_trades.scrapers.house_clerk import scrape_house_disclosures
-    from congress_trades.scrapers.pdf_parser import parse_filing
+    from congress_trades.pipeline import enrich_trades, scrape_and_store_house
 
     logger.info("Starting scheduled House scrape")
 
     try:
-        filings = await scrape_house_disclosures(
-            filing_year=datetime.now().year,
-            download_pdfs=True,
-        )
+        new_trade_ids = await scrape_and_store_house()
+        logger.info("House scrape stored %d new trades", len(new_trade_ids))
 
-        new_count = 0
-        for filing in filings:
-            filing_id = filing.get("filing_id", "")
-            if filing_id in _seen_house_filing_ids:
-                continue
-
-            _seen_house_filing_ids.add(filing_id)
-            new_count += 1
-
-            # Parse the downloaded PDF if available
-            pdf_path = filing.get("pdf_path")
-            if pdf_path:
-                try:
-                    records = await parse_filing(pdf_path)
-                    filing["transactions"] = [r.model_dump() for r in records]
-                    logger.info(
-                        "Parsed %d transactions from House filing %s",
-                        len(records),
-                        filing_id,
-                    )
-                except Exception as exc:
-                    logger.error("PDF parsing failed for %s: %s", pdf_path, exc)
-                    filing["transactions"] = []
-
-        logger.info(
-            "House scrape complete: %d total filings, %d new",
-            len(filings),
-            new_count,
-        )
+        if new_trade_ids:
+            await enrich_trades(new_trade_ids)
+            logger.info("Enriched %d House trades", len(new_trade_ids))
 
     except Exception as exc:
         logger.error("House scrape job failed: %s", exc, exc_info=True)
@@ -79,36 +49,20 @@ async def scrape_house() -> None:
 async def scrape_senate() -> None:
     """Scheduled job: scrape Senate periodic transaction reports.
 
-    Searches for recent filings, scrapes PTR pages, and stores results.
-    Skips filings whose IDs have already been processed.
+    Calls the real pipeline function to scrape, parse PTR tables, store in DB,
+    then enriches the newly discovered trades.
     """
-    from congress_trades.scrapers.senate_efd import scrape_senate_full
+    from congress_trades.pipeline import enrich_trades, scrape_and_store_senate
 
     logger.info("Starting scheduled Senate scrape")
 
     try:
-        date_to = date.today()
-        date_from = date_to - timedelta(days=7)
+        new_trade_ids = await scrape_and_store_senate()
+        logger.info("Senate scrape stored %d new trades", len(new_trade_ids))
 
-        filings = await scrape_senate_full(
-            date_from=date_from,
-            date_to=date_to,
-        )
-
-        new_count = 0
-        for filing in filings:
-            filing_id = filing.get("filing_id", "")
-            if filing_id in _seen_senate_filing_ids:
-                continue
-
-            _seen_senate_filing_ids.add(filing_id)
-            new_count += 1
-
-        logger.info(
-            "Senate scrape complete: %d total filings, %d new",
-            len(filings),
-            new_count,
-        )
+        if new_trade_ids:
+            await enrich_trades(new_trade_ids)
+            logger.info("Enriched %d Senate trades", len(new_trade_ids))
 
     except Exception as exc:
         logger.error("Senate scrape job failed: %s", exc, exc_info=True)

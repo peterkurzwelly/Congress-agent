@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { api, type Trade, type TradesResponse } from '../api/client';
+import { api, type TradesResponse } from '../api/client';
 import StatsBar from '../components/StatsBar';
 import TradeTable from '../components/TradeTable';
 import Pagination from '../components/Pagination';
@@ -7,6 +7,7 @@ import Pagination from '../components/Pagination';
 export default function TradeFeed() {
   const [data, setData] = useState<TradesResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -18,8 +19,20 @@ export default function TradeFeed() {
   const [offset, setOffset] = useState(0);
   const limit = 25;
 
+  const hasActiveFilters = !!(search || chamber || party || tradeType || dateFrom || dateTo);
+
+  const clearFilters = () => {
+    setSearch('');
+    setChamber('');
+    setParty('');
+    setTradeType('');
+    setDateFrom('');
+    setDateTo('');
+  };
+
   const fetchTrades = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const params: Record<string, string | number | undefined> = {
         offset,
@@ -34,6 +47,8 @@ export default function TradeFeed() {
       const result = await api.getTrades(params);
       setData(result);
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to fetch trades';
+      setError(message);
       console.error('Failed to fetch trades:', err);
     } finally {
       setLoading(false);
@@ -108,9 +123,29 @@ export default function TradeFeed() {
               className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
               placeholder="To"
             />
+            {hasActiveFilters && (
+              <button
+                onClick={clearFilters}
+                className="px-4 py-2 text-sm rounded bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors whitespace-nowrap"
+              >
+                Clear Filters
+              </button>
+            )}
           </div>
         </div>
       </div>
+
+      {error && (
+        <div className="bg-red-900/30 border border-red-700 rounded-lg p-4 mb-6 flex items-center justify-between">
+          <span className="text-red-300 text-sm">{error}</span>
+          <button
+            onClick={fetchTrades}
+            className="px-3 py-1 text-sm rounded bg-red-800 text-red-200 hover:bg-red-700 transition-colors ml-4"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <TradeTable trades={data?.trades ?? []} loading={loading} />
 

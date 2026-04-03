@@ -1,5 +1,12 @@
 const BASE_URL = '/api';
 
+export class ApiError extends Error {
+  constructor(public status: number, public statusText: string, public body?: string) {
+    super(`API error: ${status} ${statusText}`);
+    this.name = 'ApiError';
+  }
+}
+
 async function request<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
   const url = new URL(path, window.location.origin);
   if (params) {
@@ -11,7 +18,8 @@ async function request<T>(path: string, params?: Record<string, string | number 
   }
   const res = await fetch(url.toString());
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    const body = await res.text().catch(() => undefined);
+    throw new ApiError(res.status, res.statusText, body);
   }
   return res.json();
 }

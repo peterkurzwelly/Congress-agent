@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -7,11 +8,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from congress_trades.config import settings
 from congress_trades.db.session import init_db
 
 from .routes.analytics import router as analytics_router
 from .routes.members import router as members_router
 from .routes.trades import router as trades_router
+
+logger = logging.getLogger(__name__)
 
 # Resolve the frontend dist directory relative to the project root.
 # Works both in development (running from repo root) and in Docker.
@@ -20,9 +24,22 @@ _FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize the database on startup."""
+    """Initialize the database on startup and optionally start the scheduler."""
     await init_db()
+
+    if settings.ENABLE_SCHEDULER:
+        from congress_trades.scrapers.scheduler import start_scheduler, stop_scheduler
+
+        logger.info("Starting APScheduler (ENABLE_SCHEDULER=True)")
+        start_scheduler()
+
     yield
+
+    if settings.ENABLE_SCHEDULER:
+        from congress_trades.scrapers.scheduler import stop_scheduler
+
+        logger.info("Stopping APScheduler")
+        stop_scheduler()
 
 
 app = FastAPI(
