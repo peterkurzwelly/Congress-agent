@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Congress.gov API
     CONGRESS_API_KEY: str = ""
 
+    # Scheduler
+    ENABLE_SCHEDULER: bool = False
+
     # Scraping schedule
     SCRAPE_INTERVAL_HOURS: int = 6
     SENATE_SCRAPE_INTERVAL_HOURS: int = 4
