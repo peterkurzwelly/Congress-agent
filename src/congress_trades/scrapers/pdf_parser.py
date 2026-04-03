@@ -191,6 +191,9 @@ def _parse_collapsed_row(cell_text: str) -> RawTradeRecord | None:
     These rows look like:
     'SP Rollins, Inc. Common Stock (ROL) P 12/12/2024 01/08/2025 $15,001 -\\n[ST] $50,000\\n...'
 
+    Or with CUSIP wrapping:
+    'US TREASURY BILL DUE 03/20/25 P 12/03/2024 01/08/2024 $15,001 -\\n(912797KJ5) [GS] $50,000\\n...'
+
     The structure is roughly:
     [Owner] <Asset description with (TICKER) [TYPE]> <TxType> <Date> <NotifDate> <Amount>
     followed by optional filing status lines.
@@ -198,16 +201,13 @@ def _parse_collapsed_row(cell_text: str) -> RawTradeRecord | None:
     if not cell_text or not cell_text.strip():
         return None
 
-    # Take only the first meaningful line(s) -- strip filing status lines
-    # Filing status lines contain null bytes or start with "F" followed by nulls
+    # Split into lines and filter out filing status / subholding lines (contain null bytes)
     lines = cell_text.split("\n")
-    # Keep lines until we hit a filing status or subholding line
     data_lines: list[str] = []
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
-        # Skip lines with null bytes (filing status, subholding info)
         if "\x00" in stripped:
             continue
         data_lines.append(stripped)
@@ -215,78 +215,65 @@ def _parse_collapsed_row(cell_text: str) -> RawTradeRecord | None:
     if not data_lines:
         return None
 
-    # Rejoin the data portion
+    # Rejoin all data lines into one string
     data_text = " ".join(data_lines)
 
-    # Extract transaction date: look for the date that follows a tx_type letter
-    # (P, S, E) rather than dates embedded in asset descriptions (e.g., "DUE 03/20/25")
-    # Use \b word boundary to avoid matching "E" in "DUE", etc.
-    tx_date_match = re.search(
-        r"(?<!\w)(?:P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+(\d{1,2}/\d{1,2}/\d{2,4})",
+    # Use a comprehensive regex to parse the collapsed row structure.
+    # Pattern: [Owner] <Asset> <TxType(P/S/E)> <Date> <NotifDate> <$Amount - [$stuff] $Amount>
+    # The tx type letter (P, S, E) must be a standalone word (not part of "DUE" etc.)
+    collapsed_match = re.search(
+        r"(?<!\w)(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+"
+        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+"  # transaction date
+        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+"  # notification date
+        r"(\$[\d,]+)\s*[-–]\s*"  # amount low
+        r"(?:\([^)]*\)\s*)?(?:\[[A-Z]{2}\]\s*)?"  # optional CUSIP/bracket interleaved
+        r"(\$[\d,]+)",  # amount high
         data_text,
     )
-    if not tx_date_match:
-        # Fallback: find all dates and use the first 4-digit-year date, or last date
-        date_matches = re.findall(r"(\d{1,2}/\d{1,2}/\d{2,4})", data_text)
-        if not date_matches:
-            return None
-    else:
-        date_matches = [tx_date_match.group(1)]
 
-    # Extract amount range -- handle cases where bracket codes or CUSIP numbers
-    # appear between the two dollar amounts due to line wrapping, e.g.:
-    # "$15,001 - [ST] $50,000" or "$15,001 - (912797KJ5) [GS] $50,000"
-    amount_match = re.search(
-        r"(\$[\d,]+)\s*[-–]\s*(?:\([^)]*\)\s*)?(?:\[[A-Z]{2}\]\s*)?(\$[\d,]+)",
-        data_text,
-    )
-    if not amount_match:
+    if not collapsed_match:
         return None
 
-    amount_text = f"{amount_match.group(1)} - {amount_match.group(2)}"
+    tx_type_raw = collapsed_match.group(1).strip()
+    tx_date_text = collapsed_match.group(2)
+    amount_low = collapsed_match.group(4)
+    amount_high = collapsed_match.group(5)
+
+    tx_type = _normalize_tx_type(tx_type_raw)
+    transaction_date = _parse_date_safe(tx_date_text)
+    amount_text = f"{amount_low} - {amount_high}"
     amount_range, amount_min, amount_max = _parse_amount(amount_text)
 
-    # Extract transaction type (P, S, E, S (Full), S (Partial)) - single letter before a date
-    tx_type = "Purchase"
-    tx_match = re.search(
-        r"\]\s*(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+\d{1,2}/", data_text
-    )
-    if not tx_match:
-        # Try without bracket prefix -- use lookbehind to avoid matching
-        # letters inside words (e.g., "E" in "DUE")
-        tx_match = re.search(
-            r"(?<!\w)(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+\d{1,2}/", data_text
-        )
-    if tx_match:
-        tx_type = _normalize_tx_type(tx_match.group(1).strip())
-
-    transaction_date = _parse_date_safe(date_matches[0])
+    # Everything before the tx_type match is [Owner] + Asset
+    pre_tx = data_text[:collapsed_match.start()].strip()
 
     # Extract owner: first token if it's a known abbreviation
     owner = "Self"
-    first_token = data_text.split()[0] if data_text.split() else ""
+    first_token = pre_tx.split()[0] if pre_tx.split() else ""
     if first_token in OWNER_MAP:
         owner = OWNER_MAP[first_token]
+        asset_desc = pre_tx[len(first_token):].strip()
+    else:
+        asset_desc = pre_tx
 
-    # Extract asset description: everything between owner and tx_type
-    # Remove the owner prefix, dates, amounts, and tx type to get asset
-    asset_desc = data_text
-    # Remove owner prefix
-    if first_token in OWNER_MAP:
-        asset_desc = asset_desc[len(first_token):].strip()
-    # Remove everything from the tx_type letter onwards
-    if tx_match:
-        asset_desc = asset_desc[:asset_desc.find(tx_match.group(0))].strip()
+    # Also check for bracket/CUSIP codes that may have been wrapped into
+    # the amount area -- add them back to the asset description
+    between_amount = data_text[collapsed_match.start():collapsed_match.end()]
+    bracket_in_amount = re.search(r"\[([A-Z]{2})\]", between_amount)
+    cusip_in_amount = re.search(r"\(([A-Z0-9]{5,})\)", between_amount)
+    if cusip_in_amount and cusip_in_amount.group(1) not in asset_desc:
+        asset_desc += f" ({cusip_in_amount.group(1)})"
+    if bracket_in_amount:
+        bracket_code = f"[{bracket_in_amount.group(1)}]"
+        if bracket_code not in asset_desc:
+            asset_desc += f" {bracket_code}"
 
-    # Extract ticker and asset type from the asset description
+    # Extract ticker and asset type from the full asset description
     ticker = _extract_ticker(asset_desc)
     asset_type = _extract_asset_type_from_brackets(asset_desc)
 
     if not asset_desc:
         asset_desc = "Unknown Asset"
-
-    # Cap gains
-    cap_gains: bool | None = None
 
     return RawTradeRecord(
         transaction_date=transaction_date,
@@ -298,7 +285,7 @@ def _parse_collapsed_row(cell_text: str) -> RawTradeRecord | None:
         amount_range=amount_range,
         amount_min=amount_min,
         amount_max=amount_max,
-        capital_gains_over_200=cap_gains,
+        capital_gains_over_200=None,
         comment=None,
     )
 
@@ -371,18 +358,32 @@ def _is_house_ptr_header(headers: list[str]) -> bool:
 
 
 def _is_filing_status_row(row: list[str | None]) -> bool:
-    """Check if a row is a filing status / subholding info row (not a transaction)."""
-    for cell in row:
-        if cell and "\x00" in str(cell):
-            return True
-    # Rows where all cells after [0] are None and cell[0] has no date/amount
-    non_null = [c for c in row if c and str(c).strip()]
-    if len(non_null) <= 1 and non_null:
-        text = str(non_null[0])
-        if not re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", text):
-            if not re.search(r"\$[\d,]+", text):
-                return True
-    return False
+    """Check if a row is a filing status / subholding info row (not a transaction).
+
+    Filing status rows contain only metadata like "Filing Status: New" or
+    "Subholding Of: ..." and have null bytes. However, collapsed transaction
+    rows may ALSO contain null bytes (because the filing status text got merged
+    into cell 0). We distinguish by checking if the cell also has dates and amounts.
+    """
+    non_null = [(i, str(c).strip()) for i, c in enumerate(row)
+                if c is not None and str(c).strip()]
+
+    if not non_null:
+        return True
+
+    # If multiple cells are populated, check for null bytes in non-transaction cells
+    if len(non_null) > 2:
+        return False  # Structured row with data in multiple columns
+
+    # Single non-null cell: check if it's a transaction (has date + amount) or just metadata
+    for _idx, text in non_null:
+        has_date = bool(re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", text))
+        has_amount = bool(re.search(r"\$[\d,]+", text))
+        if has_date and has_amount:
+            return False  # Has transaction data, not a filing status row
+
+    # No date+amount found => it's just metadata
+    return True
 
 
 def _parse_table_rows(table: list[list[str | None]]) -> list[RawTradeRecord]:
