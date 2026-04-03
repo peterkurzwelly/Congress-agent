@@ -218,13 +218,28 @@ def _parse_collapsed_row(cell_text: str) -> RawTradeRecord | None:
     # Rejoin the data portion
     data_text = " ".join(data_lines)
 
-    # Extract dates (MM/DD/YYYY)
-    date_matches = re.findall(r"(\d{1,2}/\d{1,2}/\d{2,4})", data_text)
-    if not date_matches:
-        return None
+    # Extract transaction date: look for the date that follows a tx_type letter
+    # (P, S, E) rather than dates embedded in asset descriptions (e.g., "DUE 03/20/25")
+    # Use \b word boundary to avoid matching "E" in "DUE", etc.
+    tx_date_match = re.search(
+        r"(?<!\w)(?:P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+(\d{1,2}/\d{1,2}/\d{2,4})",
+        data_text,
+    )
+    if not tx_date_match:
+        # Fallback: find all dates and use the first 4-digit-year date, or last date
+        date_matches = re.findall(r"(\d{1,2}/\d{1,2}/\d{2,4})", data_text)
+        if not date_matches:
+            return None
+    else:
+        date_matches = [tx_date_match.group(1)]
 
-    # Extract amount range
-    amount_match = re.search(r"(\$[\d,]+)\s*[-–]\s*(\$[\d,]+)", data_text)
+    # Extract amount range -- handle cases where bracket codes or CUSIP numbers
+    # appear between the two dollar amounts due to line wrapping, e.g.:
+    # "$15,001 - [ST] $50,000" or "$15,001 - (912797KJ5) [GS] $50,000"
+    amount_match = re.search(
+        r"(\$[\d,]+)\s*[-–]\s*(?:\([^)]*\)\s*)?(?:\[[A-Z]{2}\]\s*)?(\$[\d,]+)",
+        data_text,
+    )
     if not amount_match:
         return None
 
@@ -237,9 +252,10 @@ def _parse_collapsed_row(cell_text: str) -> RawTradeRecord | None:
         r"\]\s*(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+\d{1,2}/", data_text
     )
     if not tx_match:
-        # Try without bracket prefix
+        # Try without bracket prefix -- use lookbehind to avoid matching
+        # letters inside words (e.g., "E" in "DUE")
         tx_match = re.search(
-            r"\b(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+\d{1,2}/", data_text
+            r"(?<!\w)(P|S\s*\(Full\)|S\s*\(Partial\)|S|E)\s+\d{1,2}/", data_text
         )
     if tx_match:
         tx_type = _normalize_tx_type(tx_match.group(1).strip())

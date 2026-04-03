@@ -3,8 +3,12 @@
 Handles the multi-step flow:
 1. GET /search/home/ to obtain CSRF token and session cookie
 2. POST /search/home/ to accept the usage agreement
-3. POST /search/ with search filters to get filing listings
+3. POST /search/report/data/ (AJAX/DataTables endpoint) to get filing listings as JSON
 4. Scrape individual PTR pages for structured transaction tables
+
+The search results at efdsearch.senate.gov are loaded via a DataTables server-side
+AJAX endpoint, not server-rendered HTML. The AJAX endpoint returns JSON with a ``data``
+key containing arrays of [first_name, last_name, filer_type, report_html, date].
 """
 
 import asyncio
@@ -576,29 +580,42 @@ async def scrape_senate_full(
     ) as client:
         await _accept_agreement(client)
 
-        # Search for filings
-        search_url = f"{BASE_URL}/search/"
-        search_page = await _request_with_backoff(client, "GET", search_url)
-        csrf_token = _extract_csrf_token(search_page.text)
+        # Get CSRF token from cookie
+        csrf_token = client.cookies.get("csrftoken", domain="efdsearch.senate.gov")
+        if not csrf_token:
+            search_page = await _request_with_backoff(
+                client, "GET", f"{BASE_URL}/search/",
+            )
+            csrf_token = client.cookies.get("csrftoken") or ""
+            if not csrf_token:
+                csrf_token = _extract_csrf_token(search_page.text)
 
-        search_data = {
-            "csrfmiddlewaretoken": csrf_token,
-            "filer_type": "1",
-            "report_type": "11",
-            "submitted_start_date": date_from.strftime("%m/%d/%Y"),
-            "submitted_end_date": date_to.strftime("%m/%d/%Y"),
-            "first_name": kwargs.get("first_name", ""),
-            "last_name": kwargs.get("last_name", ""),
-        }
+        # Paginate through AJAX results
+        filings: list[dict[str, Any]] = []
+        start = 0
+        page_size = 100
 
-        response = await _request_with_backoff(
-            client,
-            "POST",
-            search_url,
-            data=search_data,
-            headers={**HEADERS, "Referer": search_url},
-        )
-        filings = _parse_search_results(response.text)
+        while True:
+            result = await _fetch_filings_page(
+                client,
+                csrf_token,
+                start=start,
+                length=page_size,
+                date_from=date_from,
+                date_to=date_to,
+                first_name=kwargs.get("first_name", ""),
+                last_name=kwargs.get("last_name", ""),
+            )
+
+            data = result.get("data", [])
+            page_filings = _parse_search_results_json(data)
+            filings.extend(page_filings)
+
+            records_total = result.get("recordsFiltered", 0)
+            start += page_size
+            if start >= records_total or not data:
+                break
+
         logger.info("Found %d Senate filings to scrape", len(filings))
 
         # Parse each PTR page
