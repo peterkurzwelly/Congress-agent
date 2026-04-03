@@ -13,13 +13,12 @@ Usage:
 import argparse
 import asyncio
 import logging
-from datetime import date, timedelta
 
 from congress_trades.db.session import init_db
 from congress_trades.pipeline import (
+    enrich_trades,
     scrape_and_store_house,
     scrape_and_store_senate,
-    enrich_trades,
 )
 
 logger = logging.getLogger(__name__)

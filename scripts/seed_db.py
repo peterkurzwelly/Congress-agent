@@ -3,9 +3,8 @@
 import asyncio
 from datetime import date, datetime
 
-from congress_trades.db.models import Alert, EnrichedTrade, Filing, Member, Trade
+from congress_trades.db.models import EnrichedTrade, Filing, Member, Trade
 from congress_trades.db.session import async_session, init_db
-
 
 MEMBERS = [
     Member(
