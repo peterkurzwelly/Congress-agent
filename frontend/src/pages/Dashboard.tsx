@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
 import { api, type Stats, type Member, type Trade, type SectorFlow, type TimelinePoint } from '../api/client';
 import PartyBadge from '../components/PartyBadge';
@@ -31,10 +31,6 @@ export default function Dashboard() {
     api.getLateFilers().then(setLateFilers).catch(console.error).finally(() => setLateFilerLoading(false));
     api.getTimeline().then(setTimeline).catch(console.error).finally(() => setTimelineLoading(false));
   }, []);
-
-  const tooltipStyle = {
-    contentStyle: { backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#f1f5f9' },
-  };
 
   return (
     <div className="space-y-6">

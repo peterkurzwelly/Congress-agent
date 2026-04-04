@@ -1,9 +1,16 @@
 const BASE_URL = '/api';
 
 export class ApiError extends Error {
-  constructor(public status: number, public statusText: string, public body?: string) {
+  readonly status: number;
+  readonly statusText: string;
+  readonly body?: string;
+
+  constructor(status: number, statusText: string, body?: string) {
     super(`API error: ${status} ${statusText}`);
     this.name = 'ApiError';
+    this.status = status;
+    this.statusText = statusText;
+    this.body = body;
   }
 }
 

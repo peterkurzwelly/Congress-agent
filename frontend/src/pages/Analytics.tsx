@@ -190,7 +190,7 @@ export default function Analytics() {
               />
               <Tooltip
                 {...TOOLTIP_STYLE}
-                formatter={(value: number, name: string) => [value.toLocaleString(), name]}
+                formatter={(value, name) => [Number(value ?? 0).toLocaleString(), String(name)]}
               />
               <Legend />
               <Bar dataKey="buy_count" name="Buys" stackId="a" fill="#22c55e" />
@@ -212,7 +212,7 @@ export default function Analytics() {
               <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} />
               <Tooltip
                 {...TOOLTIP_STYLE}
-                formatter={(value: number) => [value.toLocaleString(), 'Filings']}
+                formatter={(value) => [Number(value ?? 0).toLocaleString(), 'Filings']}
               />
               <Bar dataKey="count" name="Filings" radius={[4, 4, 0, 0]}>
                 {delays.map((entry) => (
