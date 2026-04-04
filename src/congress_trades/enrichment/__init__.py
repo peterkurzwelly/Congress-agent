@@ -14,12 +14,14 @@ from congress_trades.enrichment.contract_correlator import find_related_contract
 from congress_trades.enrichment.price_fetcher import fetch_trade_returns
 from congress_trades.enrichment.ticker_resolver import (
     COMMON_TICKERS,
+    classify_asset_type,
     resolve_ticker,
 )
 
 __all__ = [
     "COMMITTEE_SECTOR_MAP",
     "COMMON_TICKERS",
+    "classify_asset_type",
     "fetch_member_bills",
     "fetch_member_committees",
     "fetch_trade_returns",

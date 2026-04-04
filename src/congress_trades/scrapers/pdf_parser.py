@@ -17,6 +17,7 @@ import pdfplumber
 
 from congress_trades.api.schemas import RawTradeRecord
 from congress_trades.config import settings
+from congress_trades.enrichment.ticker_resolver import classify_asset_type
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,8 @@ Each transaction object must have these fields:
   "owner": "Self" | "Spouse" | "Joint" | "Dependent Child",
   "asset_description": "Full description of the asset",
   "ticker": "AAPL" or null,
-  "asset_type": "Stock" | "Bond" | "Option" | "Fund" | "Crypto" | "Real Estate" | "Other",
+  "asset_type": "Stock" | "ETF" | "Municipal Bond" | "Corporate Bond" | "Treasury" \
+| "Option" | "Cryptocurrency" | "Mutual Fund" | "REIT" | "Other",
   "tx_type": "Purchase" | "Sale" | "Sale (Full)" | "Sale (Partial)" | "Exchange",
   "amount_range": "$1,001 - $15,000",
   "amount_min": 1001,
@@ -177,12 +179,18 @@ def _extract_ticker(asset_text: str) -> str | None:
 
 
 def _extract_asset_type_from_brackets(asset_text: str) -> str:
-    """Extract asset type from bracket code like '[ST]', '[OP]', '[GS]'."""
+    """Determine asset type from a House PTR bracket code or keyword classification.
+
+    Resolution order:
+    1. Bracket code like '[ST]', '[OP]', '[GS]' mapped through ASSET_TYPE_MAP.
+    2. classify_asset_type() keyword heuristics as a fallback.
+    """
     match = re.search(r"\[([A-Z]{2})\]", asset_text)
     if match:
         code = match.group(1)
         return ASSET_TYPE_MAP.get(code, "Other")
-    return "Stock"
+    # No bracket code -- use keyword-based classifier
+    return classify_asset_type(asset_text)
 
 
 def _parse_collapsed_row(cell_text: str) -> RawTradeRecord | None:
