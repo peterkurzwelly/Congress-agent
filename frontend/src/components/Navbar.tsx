@@ -3,6 +3,8 @@ import { Link, useLocation } from 'react-router-dom';
 const navLinks = [
   { to: '/', label: 'Trade Feed' },
   { to: '/dashboard', label: 'Dashboard' },
+  { to: '/analytics', label: 'Analytics' },
+  { to: '/watchlist', label: 'Watchlist' },
 ];
 
 export default function Navbar() {

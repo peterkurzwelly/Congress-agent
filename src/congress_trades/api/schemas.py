@@ -316,3 +316,38 @@ class MemberPerformance(BaseModel):
     avg_anomaly_score: float | None = None
     trade_count: int
     flagged_trades_count: int
+
+
+# ---------- Watchlist ----------
+
+
+class WatchlistItem(BaseModel):
+    """A single watchlist entry."""
+
+    id: int
+    watch_type: str  # "politician" or "ticker"
+    value: str  # bioguide_id or ticker symbol
+    label: str  # display name
+    notify: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WatchlistCreate(BaseModel):
+    """Payload for creating a watchlist entry."""
+
+    watch_type: str  # "politician" or "ticker"
+    value: str
+    label: str
+    notify: bool = True
+
+
+class WatchlistMatch(BaseModel):
+    """A trade that matches a watchlist entry."""
+
+    watchlist_id: int
+    watch_type: str
+    value: str
+    label: str
+    trade: TradeWithEnrichment

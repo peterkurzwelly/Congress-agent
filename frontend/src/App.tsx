@@ -3,6 +3,8 @@ import Navbar from './components/Navbar';
 import TradeFeed from './pages/TradeFeed';
 import Dashboard from './pages/Dashboard';
 import MemberProfile from './pages/MemberProfile';
+import Analytics from './pages/Analytics';
+import Watchlist from './pages/Watchlist';
 
 function NotFound() {
   return (
@@ -25,6 +27,8 @@ export default function App() {
             <Route path="/" element={<TradeFeed />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/members/:id" element={<MemberProfile />} />
+            <Route path="/analytics" element={<Analytics />} />
+            <Route path="/watchlist" element={<Watchlist />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </main>

@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import JSON, ForeignKey, String, Text
+from sqlalchemy import JSON, Boolean, ForeignKey, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -124,3 +124,17 @@ class Alert(Base):
 
     def __repr__(self) -> str:
         return f"<Alert {self.alert_id} ({self.alert_type}) for trade {self.trade_id}>"
+
+
+class Watchlist(Base):
+    __tablename__ = "watchlists"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    watch_type: Mapped[str] = mapped_column(String(20))  # "politician" or "ticker"
+    value: Mapped[str] = mapped_column(String(100))  # bioguide_id or ticker symbol
+    label: Mapped[str] = mapped_column(String(200))  # display name
+    notify: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<Watchlist {self.id} ({self.watch_type}={self.value})>"

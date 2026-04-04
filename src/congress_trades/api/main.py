@@ -12,9 +12,11 @@ from congress_trades.config import settings
 from congress_trades.db.session import init_db
 
 from .routes.analytics import router as analytics_router
+from .routes.exports import router as exports_router
 from .routes.feeds import router as feeds_router
 from .routes.members import router as members_router
 from .routes.trades import router as trades_router
+from .routes.watchlist import router as watchlist_router
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,8 @@ app.include_router(trades_router, prefix="/api/trades", tags=["trades"])
 app.include_router(members_router, prefix="/api/members", tags=["members"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(feeds_router, prefix="/feeds", tags=["feeds"])
+app.include_router(exports_router, prefix="/exports", tags=["exports"])
+app.include_router(watchlist_router, prefix="/watchlist", tags=["watchlist"])
 
 
 @app.get("/health")

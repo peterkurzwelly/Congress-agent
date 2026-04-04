@@ -31,8 +31,13 @@ RUN uv sync --no-dev
 # Copy built frontend from stage 1
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
-# Create directory for SQLite database
-RUN mkdir -p /app/data
+# Create directory for SQLite database and non-root user
+RUN mkdir -p /app/data \
+    && groupadd -g 1000 appuser \
+    && useradd -u 1000 -g appuser -s /bin/sh -d /app appuser \
+    && chown -R appuser:appuser /app/data
+
+USER appuser
 
 EXPOSE 8000
 

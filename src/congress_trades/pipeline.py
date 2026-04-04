@@ -16,8 +16,9 @@ from sqlalchemy import select
 
 from congress_trades.api.schemas import RawTradeRecord
 from congress_trades.config import settings
-from congress_trades.db.models import Filing, Member, Trade
+from congress_trades.db.models import EnrichedTrade, Filing, Member, Trade
 from congress_trades.db.session import async_session, init_db
+from congress_trades.enrichment.price_fetcher import fetch_trade_returns
 from congress_trades.scoring.anomaly_scorer import enrich_and_score
 from congress_trades.scrapers.house_clerk import scrape_house_disclosures
 from congress_trades.scrapers.pdf_parser import parse_filing
@@ -226,8 +227,68 @@ async def scrape_and_store_senate(days_back: int = 30) -> list[int]:
     return new_trade_ids
 
 
+async def _backfill_price_data(
+    enriched: EnrichedTrade, trade: Trade, session
+) -> None:
+    """Fetch and persist price data for an EnrichedTrade that has a resolved ticker
+    but is still missing price_at_trade (e.g. yfinance was unavailable on first pass).
+
+    This is called automatically at the end of each enrichment cycle so the
+    EnrichedTrade row always reflects the latest available market data.
+    """
+    ticker = enriched.resolved_ticker
+    if not ticker or enriched.price_at_trade is not None:
+        return
+
+    logger.debug(
+        "Backfilling price data for trade %d (%s) on %s",
+        trade.trade_id,
+        ticker,
+        trade.trade_date,
+    )
+
+    try:
+        price_data = await fetch_trade_returns(ticker, trade.trade_date)
+    except Exception as exc:
+        logger.warning(
+            "Price fetch failed for %s (trade %d): %s", ticker, trade.trade_id, exc
+        )
+        return
+
+    if price_data.get("price_at_trade") is None:
+        logger.debug("No price available for %s on %s", ticker, trade.trade_date)
+        return
+
+    enriched.price_at_trade = price_data.get("price_at_trade")
+    enriched.price_current = price_data.get("price_current")
+    enriched.return_1d = price_data.get("return_1d")
+    enriched.return_7d = price_data.get("return_7d")
+    enriched.return_30d = price_data.get("return_30d")
+    enriched.return_90d = price_data.get("return_90d")
+
+    # Sector/industry may also be missing if ticker was resolved late
+    if price_data.get("sector") and not enriched.sector:
+        enriched.sector = price_data["sector"]
+    if price_data.get("industry") and not enriched.industry:
+        enriched.industry = price_data["industry"]
+
+    await session.flush()
+    logger.debug(
+        "Price data backfilled for trade %d: price_at_trade=%.2f",
+        trade.trade_id,
+        enriched.price_at_trade,
+    )
+
+
 async def enrich_trades(trade_ids: list[int]) -> None:
-    """Run enrichment and scoring on a list of trade IDs."""
+    """Run enrichment and scoring on a list of trade IDs.
+
+    For each trade:
+      1. Resolve ticker, compute committee/bill/anomaly scores via enrich_and_score().
+      2. After ticker resolution, call fetch_trade_returns() to populate price fields
+         on the EnrichedTrade row if they were not set during the initial scoring pass
+         (e.g. because yfinance was rate-limited or the ticker was resolved late).
+    """
     if not trade_ids:
         logger.info("No trades to enrich")
         return
@@ -237,11 +298,23 @@ async def enrich_trades(trade_ids: list[int]) -> None:
         for trade_id in trade_ids:
             try:
                 enriched = await enrich_and_score(trade_id, session)
+
+                # After ticker resolution, ensure price data is populated.
+                # enrich_and_score already attempts this, but if yfinance returned
+                # nothing (rate limit, missing data) we retry here so the
+                # EnrichedTrade row is complete before committing.
+                stmt = select(Trade).where(Trade.trade_id == trade_id)
+                result = await session.execute(stmt)
+                trade = result.scalar_one_or_none()
+                if trade is not None:
+                    await _backfill_price_data(enriched, trade, session)
+
                 await session.commit()
                 logger.info(
-                    "Trade %d: ticker=%s score=%.1f",
+                    "Trade %d: ticker=%s price=%.2f score=%.1f",
                     trade_id,
                     enriched.resolved_ticker,
+                    enriched.price_at_trade or 0.0,
                     enriched.anomaly_score or 0,
                 )
             except Exception as exc:
